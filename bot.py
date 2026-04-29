@@ -263,21 +263,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data.startswith('add_'):
         url = data[4:]
-        info = get_full_episode_info(url)
-        if info:
-            add_anime(
-                info['title_ru'],
-                info['title_en'],
-                url,
-                info['current_episode'],
-                info['total_episodes'],
-                info['next_episode_date'],
-                None
-            )
-            await query.edit_message_text(
-                f"✅ *Добавлено:*\n{info['title_ru']}\nСерия: {info['current_episode']}",
-                parse_mode=ParseMode.MARKDOWN
-            )
+        try:
+            info = get_full_episode_info(url)
+            if info and info.get('title_ru'):
+                add_anime(
+                    info['title_ru'],
+                    info['title_en'],
+                    url,
+                    info['current_episode'],
+                    info['total_episodes'],
+                    info['next_episode_date'],
+                    None
+                )
+                await query.edit_message_text(
+                    f"✅ *Добавлено:*\n{info['title_ru']}\nСерия: {info['current_episode']}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await query.answer("❌ Не удалось получить информацию", show_alert=True)
+        except Exception as e:
+            await query.answer(f"❌ Ошибка: {e}", show_alert=True)
     
     elif data.startswith('rem_'):
         anime_id = int(data[4:])
