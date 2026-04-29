@@ -60,37 +60,24 @@ def fetchAnimeList():
     
     anime_list = []
     
-    # Parse "Последние обновления" section
-    updates_header = soup.find(string=re.compile('Последние обновления'))
-    if updates_header:
-        updates_div = updates_header.find_parent('div')
-        if updates_div:
-            for link in updates_div.find_all('a', href=True):
+    day_ids = ['raspisMon', 'raspisTue', 'raspisWed', 'raspisThu', 'raspisFri', 'raspisSat', 'raspisSun']
+    day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+    
+    for day_name, day_id in zip(day_names, day_ids):
+        div = soup.find('div', id=day_id)
+        if div:
+            links = div.find_all('a', href=True)
+            for link in links:
                 href = link.get('href')
                 if '/tip/tv/' in href and href.endswith('.html'):
-                    title = link.get_text(strip=True)
+                    title = link.get_text(strip=True).replace('~', '').strip()
                     if title and not title.startswith('http'):
+                        time = parse_schedule_time(link.get_text(strip=True))
                         anime_list.append({
                             'title': title,
                             'url': href,
-                            'type': 'updates'
-                        })
-    
-    # Parse "Расписание" section
-    schedule_header = soup.find(string=re.compile('Расписание'))
-    if schedule_header:
-        schedule_div = schedule_header.find_parent('div')
-        if schedule_div:
-            for link in schedule_div.find_all('a', href=True):
-                href = link.get('href')
-                if '/tip/tv/' in href and href.endswith('.html'):
-                    title = link.get_text(strip=True)
-                    if title and not title.startswith('http'):
-                        time = parse_schedule_time(title)
-                        anime_list.append({
-                            'title': title.replace('~', '').strip(),
-                            'url': href,
                             'type': 'schedule',
+                            'day': day_name,
                             'time': time
                         })
     

@@ -95,36 +95,45 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         anime_list = fetchAnimeList()
         
-        # Group by time
-        schedule_by_time = {}
-        day_items = []
-        
+        # Group by day
+        schedule_by_day = {}
         for anime in anime_list:
             if anime.get('type') == 'schedule':
-                time = anime.get('time', 'unknown')
-                if time == 'day' or time is None:
-                    day_items.append(anime)
-                else:
-                    if time not in schedule_by_time:
-                        schedule_by_time[time] = []
-                    schedule_by_time[time].append(anime)
-            elif anime.get('type') == 'updates':
-                day_items.append(anime)
+                day = anime.get('day', 'Unknown')
+                if day not in schedule_by_day:
+                    schedule_by_day[day] = []
+                schedule_by_day[day].append(anime)
         
-        text = "📅 *Расписание на сегодня:*\n\n"
+        if not schedule_by_day:
+            await update.message.reply_text("📭 Расписание пусто.")
+            return
         
-        for time in sorted(schedule_by_time.keys()):
-            text += f"🕐 *{time}:*\n"
-            for anime in schedule_by_time[time]:
-                text += f"• {anime['title']}\n"
+        # Determine current day of week
+        today_num = datetime.now().weekday()  # 0=Mon, 6=Sun
+        day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+        today_name = day_names[today_num]
+        
+        # Show all days (starting from today)
+        ordered_days = day_names[today_num:] + day_names[:today_num]
+        
+        text = "📅 *Расписание на неделю:*\n\n"
+        
+        for day_name in ordered_days:
+            if day_name not in schedule_by_day:
+                continue
+            day_items = schedule_by_day[day_name]
+            
+            # Skip items with time='day' (непостоянные релизы)
+            fixed_items = [a for a in day_items if a.get('time') != 'day']
+            if not fixed_items:
+                continue
+            
+            marker = "📌" if day_name == today_name else "  "
+            text += f"{marker} *{day_name}*\n"
+            for anime in sorted(fixed_items, key=lambda x: x.get('time') or 'zz'):
+                time_str = f" ({anime['time']})" if anime.get('time') else ""
+                text += f"  • {anime['title']}{time_str}\n"
             text += "\n"
-        
-        if day_items:
-            text += "📆 *В течение дня / Обновления:*\n"
-            for anime in day_items[:10]:
-                text += f"• {anime['title']}\n"
-            if len(day_items) > 10:
-                text += f"  ...и ещё {len(day_items) - 10} позиций\n"
         
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
     
