@@ -132,7 +132,9 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             marker = "📌" if day_name == today_name else "  "
             text += f"{marker} *{day_name}*\n"
             for anime in sorted(fixed_items, key=lambda x: x.get('time') or 'zz'):
-                time_str = f" ({anime['time']})" if anime.get('time') else ""
+                # Show time only if title doesn't already have it (i.e., no parens at end)
+                has_time = ' (' in anime['title'] and ')' in anime['title']
+                time_str = f" ({anime['time']})" if anime.get('time') and not has_time else ""
                 text += f"  • {anime['title']}{time_str}\n"
             text += "\n"
         
