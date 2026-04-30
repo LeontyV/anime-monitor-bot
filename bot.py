@@ -202,8 +202,10 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             anime = matches[0]
             info = get_full_episode_info(anime['url'])
             if info:
+                # Clean title_ru from problematic chars
+                title_clean = (info['title_ru'] or anime['title']).replace('[', '(').replace(']', ')').replace('*', '')
                 add_anime(
-                    info['title_ru'],
+                    title_clean,
                     info['title_en'],
                     anime['url'],
                     info['current_episode'],
@@ -212,9 +214,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     None
                 )
                 await update.message.reply_text(
-                    f"✅ *Добавлено в список мониторинга:*\n"
-                    f"{info['title_ru']}\n"
-                    f"Текущая серия: {info['current_episode']}",
+                    f"✅ *Добавлено в список мониторинга:*\n{title_clean}\nТекущая серия: {info['current_episode']}",
                     parse_mode=ParseMode.MARKDOWN
                 )
         else:
@@ -266,8 +266,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             info = get_full_episode_info(url)
             if info and info.get('title_ru'):
+                # Clean title_ru from problematic chars
+                title_clean = info['title_ru'].replace('[', '(').replace(']', ')').replace('*', '')
                 add_anime(
-                    info['title_ru'],
+                    title_clean,
                     info['title_en'],
                     url,
                     info['current_episode'],
@@ -275,8 +277,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     info['next_episode_date'],
                     None
                 )
+                await query.answer("✅ Добавлено!")
                 await query.edit_message_text(
-                    f"✅ *Добавлено:*\n{info['title_ru']}\nСерия: {info['current_episode']}",
+                    f"✅ *Добавлено:*\n{title_clean}\nСерия: {info['current_episode']}",
                     parse_mode=ParseMode.MARKDOWN
                 )
             else:

@@ -89,6 +89,13 @@ def get_full_episode_info(url):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
     
+    # Handle relative URLs
+    if url.startswith('/'):
+        base = os.getenv('VOST_URL', 'https://v13.vost.pw/tip/tv/')
+        # Extract base without trailing path
+        base = base.rsplit('/', 1)[0] if base.endswith('/') else base
+        url = base + url
+    
     try:
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
@@ -105,7 +112,8 @@ def get_full_episode_info(url):
         total_episodes = None
         
         if match:
-            current_episode = int(match.group(1))
+            # [X-Y из Z] means episodes X through Y are available, latest is Y
+            current_episode = int(match.group(2))  # Y is the latest available
             total = match.group(2)
             extra = match.group(3).strip()
             total_episodes = f"{total} {extra}" if extra else total

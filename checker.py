@@ -96,7 +96,7 @@ def check_new_episodes():
                         anime['next_episode_time']
                     )
                 else:
-                    print(f"⏸ {title}: No new episodes ({anime['current_episode']} == {current_episode})")
+                    print(f"⏸ {anime['title_ru']}: No new episodes ({anime['current_episode']} == {current_episode})")
             
             # Also check for next episode date in text
             next_pattern = r'\[(\d+)[\sсерия]*-\s*(\d+\s+\S+)\]'
