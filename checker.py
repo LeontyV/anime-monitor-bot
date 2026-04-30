@@ -15,11 +15,19 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from database import get_db_connection, get_monitored_anime, add_anime, mark_notified
+from parser import get_episode_list, get_video_url
 
 load_dotenv()
 
-VOST_URL = os.getenv('VOST_URL')
+VOST_URL = os.getenv('VOST_URL', 'https://v13.vost.pw/tip/tv/')
 TELEGRAM_TOKEN = os.getenv('TOKEN')
+
+def build_url(vost_url):
+    """Build full URL from relative path."""
+    if vost_url.startswith('http'):
+        return vost_url
+    base = VOST_URL.rstrip('/')
+    return f"{base}{vost_url}"
 ALLOWED_USER_ID = 68650276
 
 def send_telegram_message(chat_id, text):
@@ -49,33 +57,51 @@ def check_new_episodes():
     
     for anime in monitored:
         try:
-            response = requests.get(anime['vost_url'], headers=headers, timeout=30)
+            response = requests.get(build_url(anime['vost_url']), headers=headers, timeout=30)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
             text = soup.get_text()
             
-            # Look for patterns like [1-207 из 208] or [1-3 из 12+]
+            # Look for patterns like [1-207 из 208] or [1-4 из 12+]
+            # Format: [min-max из total extra]
             episode_pattern = r'\[(\d+)-(\d+)[\sиз]*([^\]]*)\]'
             match = re.search(episode_pattern, text)
             
             if match:
-                current_episode = int(match.group(1))
+                current_episode = int(match.group(2))  # max available
                 total = match.group(2)
                 extra = match.group(3).strip()
-                total_episodes = f"{total} {extra}" if extra else total
+                # Use group(3) for total_episodes if it has content, else group(2)
+                total_episodes = extra if extra else total
                 
                 # Check if there's a new episode
                 if current_episode > anime['current_episode']:
                     new_ep = current_episode
                     
+                    # Get video URL for the new episode
+                    video_link = ""
+                    try:
+                        episodes = get_episode_list(anime['vost_url'])
+                        # Find the episode that corresponds to new_ep
+                        ep_name = f"{new_ep} серия"
+                        for ep in episodes:
+                            if ep['episode'] == ep_name:
+                                video_url = get_video_url(ep['play_id'])
+                                if video_url:
+                                    video_link = f"\n\n[▶ Смотреть видео]({video_url})"
+                                break
+                    except Exception as e:
+                        print(f"⚠️ Could not get video URL: {e}")
+
                     # Send notification
                     title = anime['title_ru']
                     message = (
                         f"🆕 *Новая серия!*\n\n"
                         f"*{title}*\n"
-                        f"Серия {new_ep} из {total_episodes}\n\n"
-                        f"[Смотреть на Vost]({anime['vost_url']})"
+                        f"Серия {new_ep} из {total_episodes}"
+                        f"{video_link}\n\n"
+                        f"[Смотреть на Vost]({build_url(anime['vost_url'])})"
                     )
                     
                     try:

@@ -5,8 +5,8 @@ After=postgresql.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/.openclaw/workspace/anime_monitor
-ExecStart=/usr/bin/python3 /root/.openclaw/workspace/anime_monitor/bot.py
+WorkingDirectory=/root/anime-monitor-bot
+ExecStart=/root/anime-monitor-bot/venv/bin/python /root/anime-monitor-bot/bot.py
 Restart=always
 RestartSec=10
 

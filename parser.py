@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import re
+import json
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -92,8 +93,9 @@ def get_full_episode_info(url):
     # Handle relative URLs
     if url.startswith('/'):
         base = os.getenv('VOST_URL', 'https://v13.vost.pw/tip/tv/')
-        # Extract base without trailing path
-        base = base.rsplit('/', 1)[0] if base.endswith('/') else base
+        base = base.rstrip('/')
+        if base.endswith('/tip/tv'):
+            base = base.rsplit('/tip/tv', 1)[0]
         url = base + url
     
     try:
@@ -151,7 +153,74 @@ def get_full_episode_info(url):
         print(f"Error fetching {url}: {e}")
         return None
 
+def get_video_url(play_id):
+    """Fetch frame5.php and extract 720p video URL for a given play_id."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    frame_url = f"https://v13.vost.pw/frame5.php?play={play_id}&player=9"
+    try:
+        response = requests.get(frame_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        text = response.text
+
+        # 720p URL is directly in HTML: <a href="https://vn5614.tigerlips.org/720/{play_id}.mp4?md5=...">
+        pattern = rf'/720/{re.escape(play_id)}\.mp4\?md5=[^<"]+'
+        match = re.search(pattern, text)
+        if match:
+            return 'https://vn5614.tigerlips.org' + match.group()
+        return None
+
+    except Exception as e:
+        print(f"Error getting video URL for {play_id}: {e}")
+        return None
+
+
+def get_episode_list(url):
+    """Extract episode IDs and names from anime page.
+    Returns list of {episode: str (e.g. "1 серия"), play_id: str}
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    if url.startswith('/'):
+        base = os.getenv('VOST_URL', 'https://v13.vost.pw/tip/tv/')
+        base = base.rstrip('/')
+        if base.endswith('/tip/tv'):
+            base = base.rsplit('/tip/tv', 1)[0]
+        url = base + url
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Find inline JS data like: {"1 серия":"2147411208","2 серия":"2147411298",...}
+        pattern = r'var i = 0;\s*var data = (\{.*?\});'
+        match = re.search(pattern, response.text, re.DOTALL)
+        if not match:
+            return []
+
+        raw_data = match.group(1)
+        # Strip trailing comma before } to make valid JSON
+        raw_data = re.sub(r',\}$', '}', raw_data)
+        data = json.loads(raw_data)
+
+        episodes = []
+        for ep_name, play_id in data.items():
+            episodes.append({
+                'episode': ep_name,
+                'play_id': play_id
+            })
+        return episodes
+    except Exception as e:
+        print(f"Error fetching episodes from {url}: {e}")
+        return []
+
+
 if __name__ == '__main__':
+    SCHEDULE_ITEMS_LIMIT = int(os.getenv('SCHEDULE_ITEMS_LIMIT', '5'))
     anime_list = fetchAnimeList()
-    for anime in anime_list[:5]:
+    for anime in anime_list[:SCHEDULE_ITEMS_LIMIT]:
         print(f"{anime['title']} - {anime['url']}")

@@ -52,6 +52,17 @@ def init_db():
             message_sent BOOLEAN DEFAULT FALSE
         )
     """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS anime_episodes (
+            id SERIAL PRIMARY KEY,
+            anime_id INTEGER REFERENCES anime_list(id) ON DELETE CASCADE,
+            play_id TEXT NOT NULL,
+            episode_name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            UNIQUE(anime_id, play_id)
+        )
+    """)
     
     conn.commit()
     cur.close()
@@ -124,3 +135,48 @@ def remove_anime(anime_id):
     conn.commit()
     cur.close()
     conn.close()
+
+
+def add_episodes(anime_id, episodes):
+    """Add or update episodes for an anime.
+    episodes: list of {episode: str, play_id: str, url: str}
+    Only inserts new episodes (ON CONFLICT DO NOTHING).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    for ep in episodes:
+        cur.execute("""
+            INSERT INTO anime_episodes (anime_id, play_id, episode_name, url)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (anime_id, play_id) DO NOTHING
+        """, (anime_id, ep['play_id'], ep['episode'], ep.get('url', '')))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def update_episode_file_id(play_id, file_id):
+    """Update file_id for an episode after uploading to Telegram."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE anime_episodes SET file_id = %s WHERE play_id = %s
+    """, (file_id, str(play_id)))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_episodes(anime_id):
+    """Get all episodes for an anime, ordered by episode name."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT * FROM anime_episodes
+        WHERE anime_id = %s
+        ORDER BY episode_name
+    """, (anime_id,))
+    result = cur.fetchall()
+    cur.close()
+    conn.close()
+    return result
