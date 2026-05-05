@@ -77,7 +77,7 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await auth_check(update):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
-    anime_list = get_monitored_anime()
+    anime_list = await asyncio.to_thread(get_monitored_anime)
     if not anime_list:
         await update.message.reply_text("📭 Список мониторинга пуст.\nИспользуй /add для добавления аниме.")
         return
@@ -98,7 +98,7 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
     try:
-        anime_list = fetchAnimeList()
+        anime_list = await asyncio.to_thread(fetchAnimeList)
         schedule_by_day = {}
         for anime in anime_list:
             if anime.get('type') == 'schedule':
@@ -194,7 +194,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day_idx = int(data[1:])
         day = DAY_NAMES[day_idx]
         try:
-            anime_list = fetchAnimeList()
+            anime_list = await asyncio.to_thread(fetchAnimeList)
         except Exception as e:
             await query.edit_message_text(f"❌ Ошибка загрузки: {e}", parse_mode=ParseMode.MARKDOWN)
             return
@@ -215,7 +215,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['url_map'][h] = anime
 
         # Get URLs already in monitoring list
-        monitored = get_monitored_anime()
+        monitored = await asyncio.to_thread(get_monitored_anime)
         added_urls = {a['vost_url'] for a in monitored}
 
         await query.edit_message_text(
@@ -241,7 +241,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            info = get_full_episode_info(anime['url'])
+            info = await asyncio.to_thread(get_full_episode_info, anime['url'])
         except Exception as e:
             await query.answer(f"❌ Ошибка: {e}", show_alert=True)
             return
@@ -252,20 +252,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         title_clean = info['title_ru'].replace('[', '(').replace(']', ')').replace('*', '')
         try:
-            add_anime(
+            await asyncio.to_thread(
+                add_anime,
                 title_clean,
                 info['title_en'],
                 anime['url'],
                 info['current_episode'],
                 info['total_episodes'],
                 info['next_episode_date'],
-                None
+                info.get('next_episode_time') or anime.get('time'),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(f"Failed to add anime to DB: {e}")
 
         # Re-render keyboard with updated added status
-        monitored = get_monitored_anime()
+        monitored = await asyncio.to_thread(get_monitored_anime)
         added_urls = {a['vost_url'] for a in monitored}
 
         # Get day_anime from url_map
@@ -305,7 +306,7 @@ async def videos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await auth_check(update):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
-    anime_list = get_monitored_anime()
+    anime_list = await asyncio.to_thread(get_monitored_anime)
     if not anime_list:
         await update.message.reply_text("📭 Список мониторинга пуст.\nИспользуй /add для добавления аниме.")
         return
@@ -352,7 +353,7 @@ async def videos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Back to anime list ---
     if data == "videos_back":
-        anime_list = get_monitored_anime()
+        anime_list = await asyncio.to_thread(get_monitored_anime)
         if not anime_list:
             await query.edit_message_text("📭 Список мониторинга пуст.", parse_mode=ParseMode.MARKDOWN)
             return
@@ -366,7 +367,7 @@ async def videos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Anime selected: sync episodes from Vost, then show from DB ---
     if data.startswith("v"):
         h = data[1:]
-        anime_list = get_monitored_anime()
+        anime_list = await asyncio.to_thread(get_monitored_anime)
         anime = next((a for a in anime_list if url_hash(a['vost_url']) == h), None)
         if not anime:
             await query.answer("❌ Аниме не найдено.", show_alert=True)
@@ -374,14 +375,14 @@ async def videos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Sync new episodes from Vost to DB
         try:
-            fresh_episodes = get_episode_list(anime['vost_url'])
+            fresh_episodes = await asyncio.to_thread(get_episode_list, anime['vost_url'])
             if fresh_episodes:
-                add_episodes(anime['id'], fresh_episodes)
+                await asyncio.to_thread(add_episodes, anime['id'], fresh_episodes)
         except Exception as e:
-            pass  # Silently fail — DB may already have episodes
+            logger.warning(f"Failed to sync episodes: {e}")
 
         # Load from DB
-        episodes = get_episodes(anime['id'])
+        episodes = await asyncio.to_thread(get_episodes, anime['id'])
         if not episodes:
             await query.answer("📭 Серии не найдены.", show_alert=True)
             return
@@ -408,7 +409,7 @@ async def videos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer("▶ Открываю...", show_alert=False)
 
-        video_url = get_video_url(play_id)
+        video_url = await asyncio.to_thread(get_video_url, play_id)
         if not video_url:
             await query.answer("❌ Не удалось получить ссылку на видео.", show_alert=True)
             return
@@ -439,7 +440,7 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await auth_check(update):
         await update.message.reply_text("⛔ Доступ запрещён.")
         return
-    anime_list = get_monitored_anime()
+    anime_list = await asyncio.to_thread(get_monitored_anime)
     if not anime_list:
         await update.message.reply_text("📭 Список мониторинга пуст.")
         return
@@ -471,16 +472,17 @@ async def remove_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith('rem_'):
         anime_id = int(data[4:])
-        anime = next((a for a in get_monitored_anime() if a['id'] == anime_id), None)
+        monitored = await asyncio.to_thread(get_monitored_anime)
+        anime = next((a for a in monitored if a['id'] == anime_id), None)
         if anime:
-            remove_anime(anime_id)
+            await asyncio.to_thread(remove_anime, anime_id)
             await query.answer("🗑 Удалено!")
         else:
             await query.answer("❌ Не найдено.", show_alert=True)
             return
 
         # Re-render keyboard without deleted item
-        anime_list = get_monitored_anime()
+        anime_list = await asyncio.to_thread(get_monitored_anime)
         if not anime_list:
             await query.edit_message_text("📭 Список мониторинга пуст.", parse_mode=ParseMode.MARKDOWN)
             return
@@ -503,7 +505,7 @@ async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("🔄 Парсинг расписания с Vost...")
     try:
-        anime_list = fetchAnimeList()
+        anime_list = await asyncio.to_thread(fetchAnimeList)
         schedule_by_time = {}
         updates = []
         for anime in anime_list:

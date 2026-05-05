@@ -2,13 +2,106 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import os
+import time
+from functools import wraps
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
 
 VOST_URL = os.getenv('VOST_URL')
+
+DEFAULT_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+}
+
+
+def _retry(max_attempts=3, delay=2):
+    """Retry decorator with exponential backoff for transient failures."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (requests.Timeout, requests.ConnectionError) as e:
+                    last_exc = e
+                    if attempt < max_attempts:
+                        sleep_time = delay * (2 ** (attempt - 1))
+                        time.sleep(sleep_time)
+                    continue
+                except Exception:
+                    raise
+            raise last_exc
+        return wrapper
+    return decorator
+
+
+@_retry(max_attempts=3, delay=2)
+def get_server_time():
+    """Get Vost server timestamp."""
+    try:
+        # Extract base URL (remove /tip/tv/ suffix if present)
+        base = VOST_URL.rstrip('/')
+        if base.endswith('/tip/tv'):
+            base = base.rsplit('/tip/tv', 1)[0]
+        return int(requests.get(base + '/time.php', headers=DEFAULT_HEADERS, timeout=10).text)
+    except:
+        return None
+
+
+def get_countdown_from_page(html_text):
+    """Extract next series countdown from page HTML using server time API.
+    Returns (next_series_number, release_datetime) or (None, None).
+    
+    Countdown is calculated as: target_timestamp - server_timestamp
+    where target_timestamp is found as parseInt(NNN - t) in page JS.
+    """
+    # Get server time
+    server_ts = get_server_time()
+    if server_ts is None:
+        return None, None
+
+    # Find target timestamp: parseInt(1777910708 - t)
+    target_match = re.search(r'parseInt\((\d+) - t\)', html_text)
+    if not target_match:
+        return None, None
+    target_ts = int(target_match.group(1))
+
+    # Find next series number: nextnum = " 6"
+    series_match = re.search(r'nextnum\s*=\s*"(\s*(\d+))"', html_text)
+    if not series_match:
+        return None, None
+    series_num = int(series_match.group(2))
+
+    left_seconds = target_ts - server_ts
+    if left_seconds < 0:
+        return None, None
+
+    # Build release datetime from absolute Unix timestamp (UTC-aligned)
+    release_dt = datetime.fromtimestamp(target_ts, tz=timezone.utc).astimezone(ZoneInfo('Europe/Moscow'))
+    return series_num, release_dt
+
+
+MONTHS_RU = ['', 'янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+
+def _format_date_ru(dt):
+    """Format datetime as '04 мая' (Russian)."""
+    return f"{dt.day} {MONTHS_RU[dt.month]}"
+
+def parse_countdown(countdown_text):
+    """Parse 'До выхода 6 серии осталось: D:H:M:S' -> (series_number, datetime_of_release)."""
+    match = re.search(r'До выхода\s*(\d+)\s*серии\s*осталось:\s*(\d+):(\d+):(\d+):(\d+)', countdown_text)
+    if not match:
+        return None, None
+    series = int(match.group(1))
+    d, h, m, s = map(int, (match.group(2), match.group(3), match.group(4), match.group(5)))
+    delta = timedelta(days=d, hours=h, minutes=m, seconds=s)
+    release_dt = datetime.now(ZoneInfo('Europe/Moscow')) + delta
+    return series, release_dt
 
 def parse_episode_info(text):
     """Parse episode info like '[1-207 из 208] [208 серия - 23 апреля]'."""
@@ -48,13 +141,10 @@ def parse_schedule_time(text):
     
     return None
 
+@_retry(max_attempts=3, delay=2)
 def fetchAnimeList():
     """Fetch anime list from Vost."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    
-    response = requests.get(VOST_URL, headers=headers, timeout=30)
+    response = requests.get(VOST_URL, headers=DEFAULT_HEADERS, timeout=30)
     response.raise_for_status()
     
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -84,22 +174,21 @@ def fetchAnimeList():
     
     return anime_list
 
+@_retry(max_attempts=3, delay=2)
 def get_full_episode_info(url):
     """Get detailed episode info from anime page."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    
     # Handle relative URLs
     if url.startswith('/'):
         base = os.getenv('VOST_URL', 'https://v13.vost.pw/tip/tv/')
         base = base.rstrip('/')
         if base.endswith('/tip/tv'):
             base = base.rsplit('/tip/tv', 1)[0]
-        url = base + url
+        full_url = base + url
+    else:
+        full_url = url
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(full_url, headers=DEFAULT_HEADERS, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
@@ -121,11 +210,27 @@ def get_full_episode_info(url):
             total_episodes = f"{total} {extra}" if extra else total
         
         # Look for next episode date: [208 серия - 23 апреля]
-        next_pattern = r'\[(\d+)[\sсерия]*-\s*(\d+\s+\S+)\]'
-        match = re.search(next_pattern, text)
+        # IMPORTANT: search ONLY within shortstory div, not entire page,
+        # otherwise we pick up dates from unrelated anime in "Последние обновления"
         next_date = None
+        next_time = None
+        shortstory = soup.find('div', class_='shortstory')
+        search_area = shortstory if shortstory else soup
+        next_pattern = r'\[(\d+)[\sсерия]*-\s*(\d+\s+\S+)\]'
+        match = re.search(next_pattern, search_area.get_text())
         if match:
             next_date = match.group(2)
+
+        # Use server-time API method for countdown (no Selenium needed)
+        # Extracts target timestamp from page JS and calculates time remaining
+        if not next_date:
+            series_num, release_dt = get_countdown_from_page(response.text)
+            if series_num and release_dt:
+                next_time = release_dt.strftime('%H:%M')
+                next_date = _format_date_ru(release_dt) + " " + release_dt.strftime('%H:%M')
+                # Update current_episode if countdown series is newer
+                if series_num > current_episode:
+                    current_episode = series_num - 1
         
         # Get title
         title_ru = None
@@ -147,20 +252,19 @@ def get_full_episode_info(url):
             'title_en': title_en,
             'current_episode': current_episode,
             'total_episodes': total_episodes,
-            'next_episode_date': next_date
+            'next_episode_date': next_date,
+            'next_episode_time': next_time
         }
     except Exception as e:
         print(f"Error fetching {url}: {e}")
         return None
 
+@_retry(max_attempts=3, delay=2)
 def get_video_url(play_id):
     """Fetch frame5.php and extract 720p video URL for a given play_id."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
     frame_url = f"https://v13.vost.pw/frame5.php?play={play_id}&player=9"
     try:
-        response = requests.get(frame_url, headers=headers, timeout=30)
+        response = requests.get(frame_url, headers=DEFAULT_HEADERS, timeout=30)
         response.raise_for_status()
         text = response.text
 
@@ -176,6 +280,7 @@ def get_video_url(play_id):
         return None
 
 
+@_retry(max_attempts=3, delay=2)
 def get_episode_list(url):
     """Extract episode IDs and names from anime page.
     Returns list of {episode: str (e.g. "1 серия"), play_id: str}
